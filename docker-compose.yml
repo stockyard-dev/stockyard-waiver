@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  waiver:
+    build: .
+    ports:
+      - "9801:9801"
+    volumes:
+      - waiver_data:/data
+    environment:
+      - PORT=9801
+volumes:
+  waiver_data:
