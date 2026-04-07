@@ -39,6 +39,7 @@ func Open(d string) (*DB, error) {
 	db.SetMaxOpenConns(1)
 	db.Exec(`CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, requires_signature INTEGER DEFAULT 0, active INTEGER DEFAULT 0, created_at TEXT DEFAULT(datetime('now')))`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS signatures(id TEXT PRIMARY KEY, signer_name TEXT NOT NULL, signer_email TEXT DEFAULT '', template_id TEXT DEFAULT '', signature_data TEXT DEFAULT '', ip_address TEXT DEFAULT '', signed_at TEXT DEFAULT '', status TEXT DEFAULT '', created_at TEXT DEFAULT(datetime('now')))`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS extras(resource TEXT NOT NULL, record_id TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(resource, record_id))`)
 	return &DB{db: db}, nil
 }
 
@@ -146,4 +147,45 @@ func (d *DB) SearchSignatures(q string, filters map[string]string) []Signatures 
 	var o []Signatures
 	for rows.Next() { var e Signatures; rows.Scan(&e.ID, &e.SignerName, &e.SignerEmail, &e.TemplateId, &e.SignatureData, &e.IpAddress, &e.SignedAt, &e.Status, &e.CreatedAt); o = append(o, e) }
 	return o
+}
+
+// GetExtras returns the JSON extras blob for a record. Returns "{}" if none.
+func (d *DB) GetExtras(resource, recordID string) string {
+	var data string
+	err := d.db.QueryRow(`SELECT data FROM extras WHERE resource=? AND record_id=?`, resource, recordID).Scan(&data)
+	if err != nil || data == "" {
+		return "{}"
+	}
+	return data
+}
+
+// SetExtras stores the JSON extras blob for a record.
+func (d *DB) SetExtras(resource, recordID, data string) error {
+	if data == "" {
+		data = "{}"
+	}
+	_, err := d.db.Exec(`INSERT INTO extras(resource, record_id, data) VALUES(?, ?, ?) ON CONFLICT(resource, record_id) DO UPDATE SET data=excluded.data`, resource, recordID, data)
+	return err
+}
+
+// DeleteExtras removes extras when a record is deleted.
+func (d *DB) DeleteExtras(resource, recordID string) error {
+	_, err := d.db.Exec(`DELETE FROM extras WHERE resource=? AND record_id=?`, resource, recordID)
+	return err
+}
+
+// AllExtras returns all extras for a resource type as a map of record_id → JSON string.
+func (d *DB) AllExtras(resource string) map[string]string {
+	out := make(map[string]string)
+	rows, _ := d.db.Query(`SELECT record_id, data FROM extras WHERE resource=?`, resource)
+	if rows == nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, data string
+		rows.Scan(&id, &data)
+		out[id] = data
+	}
+	return out
 }
