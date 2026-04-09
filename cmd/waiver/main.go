@@ -48,7 +48,7 @@ func main() {
 	}
 	defer db.Close()
 
-	srv := server.New(db, server.DefaultLimits(), dataDir)
+	srv := server.New(db, server.DefaultLimits(dataDir), dataDir)
 
 	fmt.Printf("\n  Waiver v%s — Self-hosted digital waiver and consent form signing\n  Dashboard:  http://localhost:%s/ui\n  API:        http://localhost:%s/api\n  Data:       %s\n  Questions? hello@stockyard.dev — I read every message\n\n", version, port, port, dataDir)
 	log.Printf("waiver: listening on :%s", port)
