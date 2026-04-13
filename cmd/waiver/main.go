@@ -6,10 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 
 	"github.com/stockyard-dev/stockyard-waiver/internal/server"
 	"github.com/stockyard-dev/stockyard-waiver/internal/store"
+	"github.com/stockyard-dev/stockyard/bus"
 )
 
 var version = "dev"
@@ -48,7 +50,17 @@ func main() {
 	}
 	defer db.Close()
 
-	srv := server.New(db, server.DefaultLimits(dataDir), dataDir)
+	// Bus: one level up from private data dir so every tool in a
+	// bundle shares one _bus.db. Non-fatal.
+	var b *bus.Bus
+	if bb, berr := bus.Open(filepath.Dir(dataDir), "waiver"); berr != nil {
+		log.Printf("waiver: bus disabled: %v", berr)
+	} else {
+		b = bb
+		defer b.Close()
+	}
+
+	srv := server.New(db, server.DefaultLimits(dataDir), dataDir, b)
 
 	fmt.Printf("\n  Waiver v%s — Self-hosted digital waiver and consent form signing\n  Dashboard:  http://localhost:%s/ui\n  API:        http://localhost:%s/api\n  Data:       %s\n  Questions? hello@stockyard.dev — I read every message\n\n", version, port, port, dataDir)
 	log.Printf("waiver: listening on :%s", port)

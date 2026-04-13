@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/stockyard-dev/stockyard-waiver/internal/store"
+	"github.com/stockyard-dev/stockyard/bus"
 )
 
 type Server struct {
@@ -22,10 +23,11 @@ type Server struct {
 	limits  Limits
 	dataDir string
 	pCfg    map[string]json.RawMessage
+	bus     *bus.Bus // optional cross-tool event bus; nil if not configured
 }
 
-func New(db *store.DB, limits Limits, dataDir string) *Server {
-	s := &Server{db: db, mux: http.NewServeMux(), limits: limits, dataDir: dataDir}
+func New(db *store.DB, limits Limits, dataDir string, b *bus.Bus) *Server {
+	s := &Server{db: db, mux: http.NewServeMux(), limits: limits, dataDir: dataDir, bus: b}
 	s.loadPersonalConfig()
 	s.mux.HandleFunc("GET /api/templates", s.listTemplates)
 	s.mux.HandleFunc("POST /api/templates", s.createTemplates)
@@ -245,7 +247,13 @@ func (s *Server) createSignatures(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.db.CreateSignatures(&e)
-	wj(w, 201, s.db.GetSignatures(e.ID))
+	created := s.db.GetSignatures(e.ID)
+	// A signature is the signing event — fire waiver.signed on every
+	// create. If a workflow wants to distinguish draft/pending vs
+	// committed signatures, add a status gate here later; today the
+	// act of POSTing a signature row IS the signing event.
+	s.publishWaiverSigned(created)
+	wj(w, 201, created)
 }
 
 func (s *Server) getSignatures(w http.ResponseWriter, r *http.Request) {
@@ -389,4 +397,36 @@ func (s *Server) putExtras(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wj(w, 200, map[string]string{"ok": "saved"})
+}
+
+// publishWaiverSigned fires waiver.signed on the bus. No-op when bus
+// is nil. Runs in a goroutine; errors logged not surfaced. Payload
+// shape locked by docs/BUS-TOPICS.md v1 in stockyard-desktop.
+//
+// Reality notes:
+// - Waiver has no contact_id FK — signer_name/signer_email are free
+//   text. Subscribers wanting contact linkage must fuzzy-match.
+// - signature_data can be large (base64-encoded signature image);
+//   NOT forwarded in the bus payload per the <4KB guidance in
+//   BUS-TOPICS.md. Subscribers that need the image fetch it from
+//   waiver's HTTP API by signature_id.
+// - ip_address is captured but not forwarded — subscribers don't
+//   need it for their jobs (email templating, audit logging, etc.).
+func (s *Server) publishWaiverSigned(sig *store.Signatures) {
+	if s.bus == nil || sig == nil {
+		return
+	}
+	payload := map[string]any{
+		"waiver_id":    sig.ID,
+		"signer_name":  sig.SignerName,
+		"signer_email": sig.SignerEmail,
+		"template_id":  sig.TemplateId,
+		"signed_at":    sig.SignedAt,
+		"status":       sig.Status,
+	}
+	go func() {
+		if _, err := s.bus.Publish("waiver.signed", payload); err != nil {
+			log.Printf("waiver: bus publish waiver.signed failed: %v", err)
+		}
+	}()
 }
